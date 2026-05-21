@@ -219,6 +219,23 @@ export function Editor() {
     }
   }
 
+  async function deleteThisTicket() {
+    if (!id || id === 'new') return
+    if (!confirm('Delete this ticket? This removes it from your history and pay period and cannot be undone.')) return
+    setSaving(true)
+    try {
+      const { error } = await supabase.from('tickets').delete().eq('id', id)
+      if (error) throw error
+      if (imagePath) {
+        await supabase.storage.from('tickets').remove([imagePath]).catch(() => {})
+      }
+      nav('/history')
+    } catch (e) {
+      alert('Could not delete: ' + e.message)
+      setSaving(false)
+    }
+  }
+
   return (
     <AppShell title="Review Ticket" subtitle={ticket.work_order ? `WO #${ticket.work_order}` : 'New ticket'} showBack>
       {/* Merge banner - when this scan was added to an existing work order */}
@@ -292,6 +309,13 @@ export function Editor() {
         <button onClick={() => save('draft')} disabled={saving} className="flex-1 py-3.5 bg-surface border border-border rounded-xl font-semibold text-sm hover:bg-surface-2">Save Draft</button>
         <button onClick={() => save('confirmed')} disabled={saving} className="flex-1 py-3.5 bg-red hover:bg-red-hover rounded-xl text-white font-bold text-sm tracking-wide shadow-[0_8px_20px_rgba(225,29,42,0.3)] active:scale-[0.99]">{saving ? 'Saving…' : 'Confirm Ticket'}</button>
       </div>
+
+      {/* Delete - only for already-saved tickets (reassigned, scanned by mistake, etc.) */}
+      {id && id !== 'new' && (
+        <button onClick={deleteThisTicket} disabled={saving} className="mx-5 mt-3 w-[calc(100%-40px)] py-3 text-red text-sm font-medium flex items-center justify-center gap-2 hover:bg-red/[0.06] rounded-xl">
+          <Icon name="trash" className="w-4 h-4" /> Delete this ticket
+        </button>
+      )}
 
       {showAdd && <AddLineModal onClose={() => setShowAdd(false)} onAdd={addLine} />}
     </AppShell>

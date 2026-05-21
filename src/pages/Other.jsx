@@ -17,6 +17,8 @@ export function History() {
   const [profile, setProfile] = useState(null)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
+  const [confirmDelete, setConfirmDelete] = useState(null) // ticket pending deletion
+  const [deleting, setDeleting] = useState(false)
 
   useLiveData(() => { if (user) load() }, [user])
   async function load() {
@@ -24,6 +26,25 @@ export function History() {
     const { data: p } = await supabase.from('profiles').select('hourly_rate').eq('id', user.id).single()
     setTickets(t || [])
     setProfile(p)
+  }
+
+  async function deleteTicket(ticket) {
+    setDeleting(true)
+    try {
+      // ticket_lines cascade-delete automatically when the ticket is removed
+      const { error } = await supabase.from('tickets').delete().eq('id', ticket.id)
+      if (error) throw error
+      // Best-effort: remove the stored image too
+      if (ticket.image_path) {
+        await supabase.storage.from('tickets').remove([ticket.image_path]).catch(() => {})
+      }
+      setTickets(prev => prev.filter(t => t.id !== ticket.id))
+      setConfirmDelete(null)
+    } catch (e) {
+      alert('Could not delete: ' + e.message)
+    } finally {
+      setDeleting(false)
+    }
   }
 
   const rate = parseFloat(profile?.hourly_rate || 0)
@@ -64,24 +85,52 @@ export function History() {
           const services = (t.ticket_lines || []).map(l => l.description).slice(0, 3).join(' · ')
           const hrs = parseFloat(t.total_flag_hours || 0)
           return (
-            <button key={t.id} onClick={() => nav('/editor/' + t.id)} className="flex items-center gap-3.5 bg-surface border border-border-soft rounded-2xl py-3.5 px-4 hover:bg-surface-2 text-left">
-              <div className="w-12 text-center border-r border-border-soft pr-3.5">
-                <div className="text-xl font-bold leading-none">{d.getDate()}</div>
-                <div className="text-[10px] text-text-mute tracking-widest uppercase mt-1">{d.toLocaleString('en-US', { month: 'short' })}</div>
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-[11px] text-text-mute tracking-wider uppercase">WO #{t.work_order || '—'}</div>
-                <div className="text-sm font-semibold mt-0.5 truncate">{t.vehicle_year} {t.vehicle_make} {t.vehicle_model}</div>
-                <div className="text-xs text-text-dim mt-0.5 truncate">{services || 'No items'}</div>
-              </div>
-              <div className="text-right">
-                <div className="text-[17px] font-bold text-red font-mono">{hrs.toFixed(1)}</div>
-                <div className="text-[11px] text-text-dim mt-0.5">{fmtMoney(hrs * rate)}</div>
-              </div>
-            </button>
+            <div key={t.id} className="flex items-center gap-3.5 bg-surface border border-border-soft rounded-2xl py-3.5 px-4">
+              <button onClick={() => nav('/editor/' + t.id)} className="flex items-center gap-3.5 flex-1 min-w-0 text-left">
+                <div className="w-12 text-center border-r border-border-soft pr-3.5">
+                  <div className="text-xl font-bold leading-none">{d.getDate()}</div>
+                  <div className="text-[10px] text-text-mute tracking-widest uppercase mt-1">{d.toLocaleString('en-US', { month: 'short' })}</div>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[11px] text-text-mute tracking-wider uppercase">WO #{t.work_order || '—'}</div>
+                  <div className="text-sm font-semibold mt-0.5 truncate">{t.vehicle_year} {t.vehicle_make} {t.vehicle_model}</div>
+                  <div className="text-xs text-text-dim mt-0.5 truncate">{services || 'No items'}</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-[17px] font-bold text-red font-mono">{hrs.toFixed(1)}</div>
+                  <div className="text-[11px] text-text-dim mt-0.5">{fmtMoney(hrs * rate)}</div>
+                </div>
+              </button>
+              <button onClick={() => setConfirmDelete(t)} className="w-9 h-9 grid place-items-center rounded-xl text-text-mute hover:text-red hover:bg-red/10 flex-shrink-0" aria-label="Delete ticket">
+                <Icon name="trash" className="w-4 h-4" />
+              </button>
+            </div>
           )
         })}
       </div>
+
+      {/* Delete confirmation */}
+      {confirmDelete && (
+        <div className="fixed inset-0 bg-black/75 z-[300] flex items-end justify-center" onClick={e => { if (e.target === e.currentTarget) setConfirmDelete(null) }}>
+          <div className="w-full max-w-[440px] bg-surface rounded-t-3xl px-6 pt-4 pb-8 animate-slide-up">
+            <div className="w-10 h-1 bg-surface-3 rounded-full mx-auto mb-4"></div>
+            <div className="w-12 h-12 rounded-2xl bg-red/12 grid place-items-center mx-auto mb-3">
+              <Icon name="trash" className="w-6 h-6 text-red" />
+            </div>
+            <h3 className="text-lg font-semibold text-center mb-1">Delete this ticket?</h3>
+            <p className="text-sm text-text-dim text-center mb-1">
+              WO #{confirmDelete.work_order || '—'} · {confirmDelete.vehicle_make} {confirmDelete.vehicle_model}
+            </p>
+            <p className="text-xs text-text-mute text-center mb-5">
+              This removes it from your history and pay period. Use this if a ticket was reassigned or scanned by mistake. Can't be undone.
+            </p>
+            <div className="flex gap-2.5">
+              <button onClick={() => setConfirmDelete(null)} className="flex-1 py-3.5 bg-surface-2 border border-border rounded-xl font-semibold text-sm">Keep It</button>
+              <button onClick={() => deleteTicket(confirmDelete)} disabled={deleting} className="flex-1 py-3.5 bg-red text-white font-bold rounded-xl text-sm disabled:opacity-60">{deleting ? 'Deleting…' : 'Delete Ticket'}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </AppShell>
   )
 }
