@@ -261,4 +261,23 @@ Once your teammates are using it daily, here are the things to add (roughly in o
 
 DM me. I can help you debug or push fixes through GitHub → Netlify auto-deploys on every push.
 
+---
+
+## ⚙️ v0.2 update — smart scanning + work-order merge
+
+If you're updating from the first version, there's ONE extra database step:
+
+1. Supabase → SQL Editor → New query
+2. Paste the contents of `supabase/migration-merge.sql`
+3. Run it (adds an index for fast work-order lookup)
+
+What changed in v0.2:
+- **Service grouping** — verbose ticket blocks collapse into short tech names ("Tire Service," "Tire Install")
+- **N/C lines now count** — no-charge lines with FRH hours are captured (they still pay you)
+- **FRH-aware** — reads the Flat Rate Hours column as the source of truth
+- **Library auto-fill** — tickets with no FRH get hours proposed from your 50-item library, auto-accepted so they count immediately
+- **"Needs hours" state** — services it can't identify are flagged red and don't count until you enter the time
+- **Work-order merge** — scan page 2 (or an add-on job) with the same WO# and it silently merges into the same ticket, skipping duplicate services
+- **Home reminder** — a banner shows how many services need hours or are estimated, so nothing slips before payday
+
 🏁 **Track every flag. Know every dollar.**

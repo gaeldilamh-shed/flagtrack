@@ -78,31 +78,79 @@ export const STARTER_FLAG_LIBRARY = [
   { category: 'Misc', name: 'Spark Plug Replacement (8-cyl)', flag_hours: 1.5 },
 ]
 
-// Fuzzy match a parsed ticket line description to a library entry
+// Keyword -> library service name. Maps short tech terms & ticket phrases
+// to the canonical library entry. First matching rule wins.
+const SYNONYMS = [
+  { keywords: ['tire install', 'tire installation', 'mount', 'new tire'], target: 'Tire Mount & Balance (per tire)' },
+  { keywords: ['wheel balance', 'balance labor', 'tire balance'], target: 'Wheel Balance (per wheel)' },
+  { keywords: ['tire rotation', 'rotate'], target: 'Tire Rotation' },
+  { keywords: ['tpms', 'valve service', 'sensor'], target: 'TPMS Sensor Replacement (each)' },
+  { keywords: ['flat repair', 'patch', 'plug tire'], target: 'Flat Repair' },
+  { keywords: ['four wheel align', '4 wheel align', 'four-wheel'], target: 'Four-Wheel Alignment' },
+  { keywords: ['two wheel align', '2 wheel align', 'two-wheel'], target: 'Two-Wheel Alignment' },
+  { keywords: ['alignment check', 'align check', 'alignment'], target: 'Alignment Check' },
+  { keywords: ['courtesy check', 'inspection', 'multi point', 'multipoint'], target: 'Courtesy Check' },
+  { keywords: ['front brake', 'front pad'], target: 'Front Brake Pads' },
+  { keywords: ['rear brake', 'rear pad'], target: 'Rear Brake Pads' },
+  { keywords: ['brake fluid', 'brake flush'], target: 'Brake Fluid Flush' },
+  { keywords: ['brake inspect'], target: 'Brake Inspection' },
+  { keywords: ['full synthetic oil', 'synthetic oil', 'dexos'], target: 'Full Synthetic Oil Change' },
+  { keywords: ['synthetic blend', 'blend oil'], target: 'Synthetic Blend Oil Change' },
+  { keywords: ['high mileage oil'], target: 'High Mileage Oil Change' },
+  { keywords: ['diesel oil'], target: 'Diesel Oil Change' },
+  { keywords: ['oil change', 'lof', 'lube oil', 'oil & filter', 'oil and filter'], target: 'Conventional Oil Change' },
+  { keywords: ['cabin air', 'cabin filter'], target: 'Cabin Air Filter' },
+  { keywords: ['engine air', 'air filter'], target: 'Engine Air Filter' },
+  { keywords: ['fuel filter'], target: 'Fuel Filter Replacement' },
+  { keywords: ['battery install', 'battery replace', 'install battery'], target: 'Battery Install' },
+  { keywords: ['battery test', 'battery check'], target: 'Battery Test' },
+  { keywords: ['coolant', 'antifreeze', 'radiator flush'], target: 'Coolant Flush' },
+  { keywords: ['transmission', 'trans fluid', 'atf'], target: 'Transmission Fluid Service' },
+  { keywords: ['power steering'], target: 'Power Steering Flush' },
+  { keywords: ['differential', 'diff fluid'], target: 'Differential Fluid Service' },
+  { keywords: ['transfer case'], target: 'Transfer Case Service' },
+  { keywords: ['front wiper', 'wiper blade', 'wipers'], target: 'Front Wiper Blades' },
+  { keywords: ['headlight bulb', 'headlamp'], target: 'Headlight Bulb Replacement (each)' },
+  { keywords: ['headlight restor'], target: 'Headlight Restoration' },
+  { keywords: ['serpentine', 'belt replace'], target: 'Serpentine Belt Replacement' },
+  { keywords: ['timing belt'], target: 'Timing Belt Replacement' },
+  { keywords: ['check engine', 'cel diag'], target: 'Check Engine Light Diagnostic' },
+  { keywords: ['ac diag', 'a/c diag'], target: 'AC System Diagnostic' },
+  { keywords: ['electrical diag'], target: 'Electrical Diagnostic' },
+  { keywords: ['diagnostic', 'diag'], target: 'Basic Diagnostic' },
+  { keywords: ['ac recharge', 'a/c recharge', '1234yf'], target: 'AC Recharge (R-1234yf)' },
+  { keywords: ['spark plug'], target: 'Spark Plug Replacement (4-cyl)' },
+]
+
+// Fuzzy match a parsed ticket service name to a library entry.
+// Tries synonym keywords first (best for short tech names), then fuzzy text match.
 export function matchLibraryItem(description, library) {
   if (!description) return null
   const desc = description.toLowerCase().trim()
+
+  // 1) Synonym keyword match (handles short tech names + verbose ticket text)
+  for (const syn of SYNONYMS) {
+    if (syn.keywords.some(k => desc.includes(k))) {
+      const target = library.find(i => i.name === syn.target)
+      if (target) return { ...target, confidence: 'high' }
+    }
+  }
+
+  // 2) Fuzzy text match against library names
   let bestMatch = null
   let bestScore = 0
-
   for (const item of library) {
     const name = item.name.toLowerCase()
     let score = 0
-
-    // Exact match
     if (desc === name) score = 100
-    // Contains full name
     else if (desc.includes(name)) score = 80
-    // Name contains desc
     else if (name.includes(desc) && desc.length > 5) score = 70
-    // Word overlap
     else {
       const descWords = new Set(desc.split(/\s+/).filter(w => w.length > 2))
       const nameWords = name.split(/\s+/).filter(w => w.length > 2)
       const overlap = nameWords.filter(w => descWords.has(w)).length
       if (overlap > 0) score = (overlap / nameWords.length) * 60
     }
-
     if (score > bestScore) {
       bestScore = score
       bestMatch = item

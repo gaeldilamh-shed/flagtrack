@@ -28,6 +28,8 @@ export function Editor() {
   const [imagePath, setImagePath] = useState(null)
   const [showAdd, setShowAdd] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [mergedTicketId, setMergedTicketId] = useState(null)
+  const [mergeNote, setMergeNote] = useState('')
 
   useEffect(() => {
     if (id === 'new' && !isManual) {
@@ -36,13 +38,42 @@ export function Editor() {
       if (raw) {
         try {
           const parsed = JSON.parse(raw)
-          loadFromScan(parsed)
+          handleScan(parsed)
         } catch {}
       }
     } else if (id && id !== 'new') {
       loadTicket(id)
     }
   }, [id])
+
+  // When a scan comes in: if a ticket with the same Work Order # already exists,
+  // load it and append the new (non-duplicate) services. Otherwise start fresh.
+  async function handleScan(scan) {
+    const wo = (scan.work_order || '').trim()
+    if (wo) {
+      const { data: existing } = await supabase
+        .from('tickets').select('*').eq('user_id', user.id).eq('work_order', wo).maybeSingle()
+      if (existing) {
+        // Merge into the existing ticket
+        const { data: existingLines } = await supabase
+          .from('ticket_lines').select('*').eq('ticket_id', existing.id).order('position')
+        setTicket(existing)
+        setImagePath(existing.image_path)
+        setMergedTicketId(existing.id)
+        setMergeNote(`Added to existing ticket WO #${wo}`)
+
+        const items = scan.services || scan.line_items || []
+        const existingNames = new Set((existingLines || []).map(l => (l.description || '').toLowerCase().trim()))
+        const newLines = items
+          .map((s, idx) => mapServiceToLine(s, (existingLines?.length || 0) + idx))
+          .filter(l => !existingNames.has((l.description || '').toLowerCase().trim())) // skip exact-duplicate services
+        setLines([...(existingLines || []), ...newLines])
+        return
+      }
+    }
+    // No existing match -> fresh ticket
+    loadFromScan(scan)
+  }
 
   async function loadTicket(ticketId) {
     const { data: t } = await supabase.from('tickets').select('*').eq('id', ticketId).single()
@@ -66,22 +97,48 @@ export function Editor() {
       vehicle_engine: scan.vehicle?.engine || '',
       vin: scan.vehicle?.vin || '',
       customer_name: scan.customer_name || '',
+      store_number: scan.store_number || '',
     }))
-    // Map scanned lines to lib entries
-    const mapped = (scan.line_items || []).map((li, idx) => {
-      const match = matchLibraryItem(li.description, STARTER_FLAG_LIBRARY)
-      return {
-        id: `tmp_${idx}`,
-        position: idx,
-        description: li.description || '',
-        quantity: li.quantity || 1,
-        flag_hours_per_unit: match?.flag_hours || li.flag_hours_per_unit || 0,
-        status: match ? 'estimated' : 'pending',
-        match_confidence: match?.confidence || null,
-        notes: '',
-      }
-    })
+    // Accept both new "services" and legacy "line_items"
+    const items = scan.services || scan.line_items || []
+    const mapped = items.map((s, idx) => mapServiceToLine(s, idx))
     setLines(mapped)
+  }
+
+  // Convert one scanned service into an editor line with the right state.
+  // Priority: ticket FRH (confirmed) > library proposal (estimated, auto-accepted) > needs hours (pending)
+  function mapServiceToLine(s, idx) {
+    const name = s.name || s.description || ''
+    const ticketHours = (s.flag_hours === null || s.flag_hours === undefined) ? 0 : parseFloat(s.flag_hours) || 0
+    const match = matchLibraryItem(name, STARTER_FLAG_LIBRARY)
+    let flagHours, status, confidence
+    if (ticketHours > 0) {
+      // Ticket prints the flag time -> source of truth
+      flagHours = ticketHours
+      status = 'confirmed'
+      confidence = null
+    } else if (match) {
+      // No FRH on ticket, but recognized -> propose library hours, AUTO-ACCEPTED (counts now)
+      flagHours = match.flag_hours
+      status = 'estimated'
+      confidence = match.confidence
+    } else {
+      // Can't identify -> needs the tech to enter hours; does NOT count yet
+      flagHours = 0
+      status = 'needs_hours'
+      confidence = null
+    }
+    return {
+      id: `tmp_${idx}_${Date.now()}`,
+      position: idx,
+      description: name,
+      quantity: s.quantity || 1,
+      flag_hours_per_unit: flagHours,
+      status,
+      match_confidence: confidence,
+      labor_dollars: s.labor_dollars || null,
+      notes: '',
+    }
   }
 
   function updateLine(idx, patch) {
@@ -103,9 +160,11 @@ export function Editor() {
     setShowAdd(false)
   }
 
+  // Totals: only count lines that actually have hours. needs_hours lines don't count yet.
   const totalHours = lines.reduce((sum, l) => sum + (parseFloat(l.quantity || 0) * parseFloat(l.flag_hours_per_unit || 0)), 0)
   const confirmedHours = lines.filter(l => l.status === 'confirmed').reduce((s, l) => s + (parseFloat(l.quantity || 0) * parseFloat(l.flag_hours_per_unit || 0)), 0)
-  const estimatedHours = lines.filter(l => l.status === 'estimated' || l.status === 'pending').reduce((s, l) => s + (parseFloat(l.quantity || 0) * parseFloat(l.flag_hours_per_unit || 0)), 0)
+  const estimatedHours = lines.filter(l => l.status === 'estimated').reduce((s, l) => s + (parseFloat(l.quantity || 0) * parseFloat(l.flag_hours_per_unit || 0)), 0)
+  const needsHoursCount = lines.filter(l => l.status === 'needs_hours').length
 
   async function save(status = 'confirmed') {
     setSaving(true)
@@ -117,8 +176,13 @@ export function Editor() {
         status,
         image_path: imagePath,
       }
+      // Don't try to write the joined fields back
+      delete ticketData.id
+      delete ticketData.created_at
+      delete ticketData.updated_at
 
-      let ticketId = id !== 'new' ? id : null
+      // Use merged ticket id if this scan matched an existing WO#, else the route id
+      let ticketId = mergedTicketId || (id !== 'new' ? id : null)
 
       if (!ticketId) {
         const { data, error } = await supabase.from('tickets').insert(ticketData).select().single()
@@ -157,11 +221,27 @@ export function Editor() {
 
   return (
     <AppShell title="Review Ticket" subtitle={ticket.work_order ? `WO #${ticket.work_order}` : 'New ticket'} showBack>
+      {/* Merge banner - when this scan was added to an existing work order */}
+      {mergeNote && (
+        <div className="mx-5 mb-3.5 p-3 bg-green/[0.08] border border-green/25 rounded-xl flex items-start gap-2.5">
+          <Icon name="copy" className="w-4 h-4 text-green flex-shrink-0 mt-0.5" />
+          <div className="text-xs leading-relaxed text-text-dim"><strong className="text-green">Merged.</strong> {mergeNote} — new services were appended and duplicates skipped.</div>
+        </div>
+      )}
+
       {/* OCR draft banner only when from scan */}
-      {!isManual && id === 'new' && lines.length > 0 && (
+      {!isManual && id === 'new' && lines.length > 0 && !mergeNote && (
         <div className="mx-5 mb-3.5 p-3 bg-amber/[0.08] border border-amber/25 rounded-xl flex items-start gap-2.5">
           <Icon name="info" className="w-4 h-4 text-amber flex-shrink-0 mt-0.5" />
-          <div className="text-xs leading-relaxed text-text-dim"><strong className="text-amber">OCR draft.</strong> Flag hours filled from your library based on vehicle match. Confirm or edit each line.</div>
+          <div className="text-xs leading-relaxed text-text-dim"><strong className="text-amber">Auto-filled.</strong> Confirmed hours come from the ticket; estimated hours come from your library and already count. Edit any line if needed.</div>
+        </div>
+      )}
+
+      {/* Needs-hours warning */}
+      {needsHoursCount > 0 && (
+        <div className="mx-5 mb-3.5 p-3 bg-red/[0.08] border border-red/25 rounded-xl flex items-start gap-2.5">
+          <Icon name="clock" className="w-4 h-4 text-red flex-shrink-0 mt-0.5" />
+          <div className="text-xs leading-relaxed text-text-dim"><strong className="text-red">{needsHoursCount} {needsHoursCount === 1 ? 'service needs' : 'services need'} hours.</strong> These don't count toward your total until you enter the flag time. Tap the line to add it.</div>
         </div>
       )}
 
@@ -181,7 +261,7 @@ export function Editor() {
 
       {/* Section title */}
       <div className="px-5 pt-2 pb-2.5 flex justify-between items-center">
-        <span className="text-xs font-semibold tracking-widest text-text-dim uppercase">Line Items</span>
+        <span className="text-xs font-semibold tracking-widest text-text-dim uppercase">Services</span>
         <span className="bg-surface-3 text-text-main rounded-full px-2.5 py-0.5 text-[11px]">{lines.length}</span>
       </div>
 
@@ -198,9 +278,10 @@ export function Editor() {
 
       {/* Summary */}
       <div className="mx-5 mt-4 p-5 rounded-3xl border border-border-soft" style={{ background: 'linear-gradient(180deg, rgba(225,29,42,0.08), transparent), #15151A' }}>
-        <Row label="Line items" value={lines.length} />
+        <Row label="Services" value={lines.length} />
         <Row label="Confirmed hours" value={`${confirmedHours.toFixed(2)} hr`} />
         <Row label="Estimated hours" value={`${estimatedHours.toFixed(2)} hr`} />
+        {needsHoursCount > 0 && <Row label="Needs hours" value={`${needsHoursCount} ${needsHoursCount === 1 ? 'service' : 'services'}`} />}
         <div className="mt-2 pt-3 border-t border-border-soft flex justify-between items-center">
           <span className="text-text-dim">Ticket Total</span>
           <span className="text-red text-[22px] font-bold font-mono">{totalHours.toFixed(2)} hr</span>
@@ -236,17 +317,21 @@ function FieldSmall({ label, value, onChange }) {
 
 function LineItem({ line, onChange, onRemove, onCopy }) {
   const total = (parseFloat(line.quantity || 0) * parseFloat(line.flag_hours_per_unit || 0)).toFixed(2)
+  const needsHours = line.status === 'needs_hours'
   return (
-    <div className="bg-surface border border-border-soft rounded-2xl overflow-hidden">
+    <div className={`bg-surface border rounded-2xl overflow-hidden ${needsHours ? 'border-red/40' : 'border-border-soft'}`}>
       <div className="px-4 pt-3.5 pb-2.5">
         <input value={line.description} onChange={e => onChange({ description: e.target.value })} className="w-full bg-transparent text-[15px] font-semibold focus:text-red" placeholder="Service / item name" />
-        <div className="flex gap-1.5 flex-wrap mt-2">
+        <div className="flex gap-1.5 flex-wrap mt-2 items-center">
           <StatusBadge status={line.status} onChange={s => onChange({ status: s })} />
           {line.match_confidence && (
             <span className={`text-[11px] font-semibold px-2 py-1 rounded-md uppercase tracking-wider ${line.match_confidence === 'high' ? 'bg-green/10 text-green' : line.match_confidence === 'medium' ? 'bg-amber/10 text-amber' : 'bg-red/10 text-red'}`}>
               ● {line.match_confidence} match
             </span>
           )}
+          {line.labor_dollars ? (
+            <span className="text-[11px] text-text-mute px-1.5 py-1">Ticket labor: ${Number(line.labor_dollars).toFixed(2)}</span>
+          ) : null}
         </div>
       </div>
       <div className="grid grid-cols-3 bg-surface-2 border-t border-border-soft">
@@ -254,7 +339,13 @@ function LineItem({ line, onChange, onRemove, onCopy }) {
           <input type="number" step="1" min="1" value={line.quantity} onChange={e => onChange({ quantity: e.target.value })} className="w-full bg-transparent text-center text-base font-bold font-mono focus:text-red" />
         </Cell>
         <Cell label="Flag / Unit">
-          <input type="number" step="0.1" min="0" value={line.flag_hours_per_unit} onChange={e => onChange({ flag_hours_per_unit: e.target.value })} className="w-full bg-transparent text-center text-base font-bold font-mono focus:text-red" />
+          <input type="number" step="0.1" min="0" value={line.flag_hours_per_unit} onChange={e => {
+            const v = e.target.value
+            const patch = { flag_hours_per_unit: v }
+            // If they fill hours on a needs_hours line, promote it to confirmed
+            if (line.status === 'needs_hours' && parseFloat(v) > 0) patch.status = 'confirmed'
+            onChange(patch)
+          }} className="w-full bg-transparent text-center text-base font-bold font-mono focus:text-red" />
         </Cell>
         <Cell label="Total Hrs">
           <div className="text-base font-bold font-mono text-red">{total}</div>
@@ -285,15 +376,16 @@ function MiniBtn({ children, onClick, danger }) {
 }
 
 function StatusBadge({ status, onChange }) {
-  const opts = ['confirmed', 'estimated', 'pending', 'added_later']
+  const opts = ['confirmed', 'estimated', 'needs_hours', 'added_later']
   const next = () => { const i = opts.indexOf(status); onChange(opts[(i + 1) % opts.length]) }
   const colors = {
     confirmed: 'bg-green/10 text-green',
     estimated: 'bg-amber/10 text-amber',
     pending: 'bg-amber/10 text-amber',
+    needs_hours: 'bg-red/10 text-red',
     added_later: 'bg-red/10 text-red',
   }
-  const labels = { confirmed: 'Confirmed', estimated: 'Estimated', pending: 'Pending', added_later: 'Added Later' }
+  const labels = { confirmed: 'Confirmed', estimated: 'Estimated', pending: 'Pending', needs_hours: 'Needs Hours', added_later: 'Added Later' }
   return (
     <button onClick={next} className={`text-[11px] font-semibold px-2 py-1 rounded-md uppercase tracking-wider ${colors[status] || 'bg-surface-3 text-text-dim'}`}>
       {labels[status] || status}

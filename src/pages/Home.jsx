@@ -19,6 +19,8 @@ export function Home() {
     todayTickets: 0,
     weekTickets: 0,
     daysLeft: 0,
+    needsHours: 0,
+    estimated: 0,
   })
 
   useEffect(() => {
@@ -76,6 +78,18 @@ export function Home() {
     const incomeGoal = goals?.find(g => g.goal_type === 'income' && g.period === 'weekly')
     const hourGoal = goals?.find(g => g.goal_type === 'hours' && g.period === 'weekly')
 
+    // Count lines that still need attention this week (needs_hours + estimated)
+    let needsHours = 0, estimated = 0
+    const ticketIds = (tickets || []).map(t => t.id)
+    if (ticketIds.length > 0) {
+      const { data: revLines } = await supabase
+        .from('ticket_lines')
+        .select('status, ticket_id')
+        .in('ticket_id', ticketIds)
+      needsHours = (revLines || []).filter(l => l.status === 'needs_hours').length
+      estimated = (revLines || []).filter(l => l.status === 'estimated').length
+    }
+
     setStats({
       weekHours: weekHours,
       weekPay,
@@ -84,6 +98,8 @@ export function Home() {
       todayTickets,
       weekTickets: tickets?.length || 0,
       daysLeft,
+      needsHours,
+      estimated,
     })
   }
 
@@ -97,6 +113,24 @@ export function Home() {
         <h1 className="text-2xl font-bold tracking-tight">Welcome back, {firstName}!</h1>
         <p className="text-sm text-text-dim mt-1">Let's keep crushing your goals.</p>
       </div>
+
+      {/* Review reminder - surfaces lines that need attention before payday */}
+      {(stats.needsHours > 0 || stats.estimated > 0) && (
+        <button onClick={() => nav('/history')} className="mx-5 mb-4 w-[calc(100%-40px)] flex items-center gap-3 bg-amber/[0.08] border border-amber/25 rounded-2xl px-4 py-3 text-left hover:bg-amber/[0.12]">
+          <div className="w-9 h-9 rounded-xl bg-amber/15 grid place-items-center flex-shrink-0">
+            <Icon name="info" className="w-[18px] h-[18px] text-amber" />
+          </div>
+          <div className="flex-1">
+            <div className="text-sm font-semibold text-text-main">
+              {stats.needsHours > 0 && `${stats.needsHours} ${stats.needsHours === 1 ? 'service needs' : 'services need'} hours`}
+              {stats.needsHours > 0 && stats.estimated > 0 && ' · '}
+              {stats.estimated > 0 && `${stats.estimated} estimated`}
+            </div>
+            <div className="text-xs text-text-dim mt-0.5">Tap to review before payday</div>
+          </div>
+          <Icon name="chevRight" className="w-4 h-4 text-text-mute" />
+        </button>
+      )}
 
       {/* Scan card */}
       <div className="mx-5 p-9 px-6 pb-7 text-center rounded-3xl border border-border-soft" style={{ background: 'radial-gradient(140% 100% at 50% 0%, rgba(225,29,42,0.06), transparent 50%), #15151A' }}>
