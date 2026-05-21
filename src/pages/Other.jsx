@@ -1,22 +1,24 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { AppShell } from '../components/AppShell'
 import { Icon } from '../components/Icon'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { fmtMoney, useRateLock } from '../lib/privacy'
 import { UnlockModal } from '../components/UnlockModal'
+import { getCurrentPeriod, paceStatus, periodRangeLabel } from '../lib/payPeriod'
 
 // ============ HISTORY ============
 export function History() {
   const nav = useNavigate()
+  const loc = useLocation()
   const { user } = useAuth()
   const [tickets, setTickets] = useState([])
   const [profile, setProfile] = useState(null)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
 
-  useEffect(() => { if (user) load() }, [user])
+  useEffect(() => { if (user) load() }, [user, loc.key])
   async function load() {
     const { data: t } = await supabase.from('tickets').select('*, ticket_lines(description)').eq('user_id', user.id).order('ticket_date', { ascending: false }).limit(100)
     const { data: p } = await supabase.from('profiles').select('hourly_rate').eq('id', user.id).single()
@@ -87,14 +89,15 @@ export function History() {
 // ============ DASHBOARD ============
 export function Dashboard() {
   const { user } = useAuth()
+  const loc = useLocation()
   const [tickets, setTickets] = useState([])
   const [profile, setProfile] = useState(null)
   const { unlocked } = useRateLock()
   const [showUnlock, setShowUnlock] = useState(false)
 
-  useEffect(() => { if (user) load() }, [user])
+  useEffect(() => { if (user) load() }, [user, loc.key])
   async function load() {
-    const since = new Date(); since.setDate(since.getDate() - 90)
+    const since = new Date(); since.setDate(since.getDate() - 120)
     const { data: t } = await supabase.from('tickets').select('*').eq('user_id', user.id).gte('ticket_date', since.toISOString())
     const { data: p } = await supabase.from('profiles').select('*').eq('id', user.id).single()
     setTickets(t || [])
@@ -103,55 +106,58 @@ export function Dashboard() {
 
   const rate = parseFloat(profile?.hourly_rate || 0)
 
-  // This week (Mon-Sun)
+  // Current period (user-configured)
   const now = new Date()
-  const day = now.getDay()
-  const diff = day === 0 ? -6 : 1 - day
-  const monday = new Date(now); monday.setDate(now.getDate() + diff); monday.setHours(0,0,0,0)
-  const lastWeekMon = new Date(monday); lastWeekMon.setDate(monday.getDate() - 7)
+  const period = getCurrentPeriod(profile, now)
+  const prevStart = new Date(period.start); prevStart.setDate(period.start.getDate() - period.daysTotal)
+  const prevEnd = new Date(period.start); prevEnd.setMilliseconds(-1)
 
-  const weekTickets = tickets.filter(t => new Date(t.ticket_date) >= monday)
-  const lastWeekTickets = tickets.filter(t => { const d = new Date(t.ticket_date); return d >= lastWeekMon && d < monday })
+  const periodTickets = tickets.filter(t => { const d = new Date(t.ticket_date); return d >= period.start && d <= period.end })
+  const prevTickets = tickets.filter(t => { const d = new Date(t.ticket_date); return d >= prevStart && d < period.start })
 
-  const weekHours = weekTickets.reduce((s, t) => s + parseFloat(t.total_flag_hours || 0), 0)
-  const lastWeekHours = lastWeekTickets.reduce((s, t) => s + parseFloat(t.total_flag_hours || 0), 0)
-  const pctDelta = lastWeekHours > 0 ? Math.round(((weekHours - lastWeekHours) / lastWeekHours) * 100) : 0
+  const periodHours = periodTickets.reduce((s, t) => s + parseFloat(t.total_flag_hours || 0), 0)
+  const prevHours = prevTickets.reduce((s, t) => s + parseFloat(t.total_flag_hours || 0), 0)
+  const pctDelta = prevHours > 0 ? Math.round(((periodHours - prevHours) / prevHours) * 100) : 0
 
-  // Bars: hours per day Mon-Sun
-  const byDay = [0, 0, 0, 0, 0, 0, 0]
-  weekTickets.forEach(t => {
-    const d = new Date(t.ticket_date)
-    const idx = d.getDay() === 0 ? 6 : d.getDay() - 1
-    byDay[idx] += parseFloat(t.total_flag_hours || 0)
+  // Bars: hours per day across the period (cap display at 7 for weekly, 14 biweekly)
+  const byDay = new Array(period.daysTotal).fill(0)
+  periodTickets.forEach(t => {
+    const d = new Date(t.ticket_date); d.setHours(0,0,0,0)
+    const idx = Math.floor((d - period.start) / (24*60*60*1000))
+    if (idx >= 0 && idx < period.daysTotal) byDay[idx] += parseFloat(t.total_flag_hours || 0)
   })
   const maxDay = Math.max(...byDay, 1)
-  const bestDayIdx = byDay.indexOf(Math.max(...byDay))
-  const bestDay = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][bestDayIdx]
-  const avg = weekHours / 7
+  const bestVal = Math.max(...byDay)
+  const elapsedDays = Math.max(1, period.daysElapsed)
+  const avg = periodHours / elapsedDays
+  const periodWord = period.daysTotal === 14 ? 'Period' : 'Week'
+
+  // Day labels
+  const dayLabels = []
+  for (let i = 0; i < period.daysTotal; i++) {
+    const d = new Date(period.start); d.setDate(period.start.getDate() + i)
+    dayLabels.push(['S','M','T','W','T','F','S'][d.getDay()])
+  }
 
   return (
     <AppShell title="Dashboard" subtitle="Your numbers at a glance" showBack>
       <div className="grid grid-cols-2 gap-3 px-5 mb-4">
-        <MiniStat label="This Week" value={weekHours.toFixed(1)} suffix="hrs" red delta={pctDelta} />
-        <MiniStat label="Est. Gross" value={fmtMoney(weekHours * rate).replace(/\.\d+/, '')} suffix=".00" privateValue blurred={!unlocked} />
-        <MiniStat label="Best Day" value={Math.max(...byDay).toFixed(1)} suffix=" hrs" subtitle={bestDay} />
+        <MiniStat label={`This ${periodWord}`} value={periodHours.toFixed(1)} suffix="hrs" red delta={pctDelta} />
+        <MiniStat label="Est. Gross" value={fmtMoney(periodHours * rate).replace(/\.\d+/, '')} suffix=".00" privateValue blurred={!unlocked} />
+        <MiniStat label="Best Day" value={bestVal.toFixed(1)} suffix=" hrs" />
         <MiniStat label="Avg / Day" value={avg.toFixed(1)} suffix=" hrs" />
       </div>
 
       <div className="mx-5 mb-4 p-5 bg-surface border border-border-soft rounded-3xl">
         <div className="flex justify-between items-center mb-4">
-          <div className="text-sm font-semibold">Flag Hours Trend</div>
-          <div className="flex gap-1 bg-surface-2 rounded-lg p-0.5">
-            {['D', 'W', 'M', 'Y'].map((t, i) => (
-              <button key={t} className={`text-[11px] px-2.5 py-1 rounded font-semibold tracking-wide ${i === 1 ? 'bg-red text-white' : 'text-text-mute'}`}>{t}</button>
-            ))}
-          </div>
+          <div className="text-sm font-semibold">Flag Hours · This {periodWord}</div>
+          <span className="text-xs text-text-mute">{periodRangeLabel(period)}</span>
         </div>
-        <div className="flex gap-2 items-end h-32 px-1">
-          {['MON','TUE','WED','THU','FRI','SAT','SUN'].map((d, i) => (
-            <div key={d} className="flex-1 flex flex-col items-center gap-2">
-              <div className="w-full bg-gradient-to-b from-red to-[#8B0E18] rounded-t-md min-h-[4px] shadow-[0_-4px_12px_rgba(225,29,42,0.2)]" style={{ height: `${Math.max(4, (byDay[i] / maxDay) * 100)}%` }}></div>
-              <div className="text-[10px] text-text-mute font-medium tracking-wider">{d}</div>
+        <div className="flex gap-1.5 items-end h-32 px-1">
+          {byDay.map((h, i) => (
+            <div key={i} className="flex-1 flex flex-col items-center gap-2">
+              <div className="w-full bg-gradient-to-b from-red to-[#8B0E18] rounded-t-md min-h-[4px] shadow-[0_-4px_12px_rgba(225,29,42,0.2)]" style={{ height: `${Math.max(4, (h / maxDay) * 100)}%` }}></div>
+              <div className="text-[10px] text-text-mute font-medium tracking-wider">{dayLabels[i]}</div>
             </div>
           ))}
         </div>
@@ -164,11 +170,11 @@ export function Dashboard() {
         </button>
       </div>
       <div className="mx-5 bg-surface border border-border-soft rounded-3xl overflow-hidden">
+        <ProjRow label="Earned so far" value={fmtMoney(periodHours * rate)} blurred={!unlocked} />
+        <ProjRow label={`${periodWord} projected`} value={fmtMoney(avg * period.daysTotal * rate)} blurred={!unlocked} />
         <ProjRow label="Daily Avg" value={fmtMoney(avg * rate)} blurred={!unlocked} />
-        <ProjRow label="This Week (proj)" value={fmtMoney((weekHours + avg * Math.max(0, 5 - day)) * rate)} blurred={!unlocked} />
-        <ProjRow label="Biweekly" value={fmtMoney(weekHours * 2 * rate)} blurred={!unlocked} />
-        <ProjRow label="Monthly" value={fmtMoney(avg * 30 * rate)} blurred={!unlocked} />
-        <ProjRow label="Yearly" value={fmtMoney(avg * 52 * 7 * rate)} blurred={!unlocked} />
+        <ProjRow label="Monthly (est)" value={fmtMoney(avg * 30 * rate)} blurred={!unlocked} />
+        <ProjRow label="Yearly (est)" value={fmtMoney(avg * 365 * rate)} blurred={!unlocked} />
       </div>
 
       <UnlockModal open={showUnlock} onClose={() => setShowUnlock(false)} />
@@ -204,39 +210,94 @@ function ProjRow({ label, value, blurred }) {
 // ============ GOALS ============
 export function Goals() {
   const { user } = useAuth()
-  const [goals, setGoals] = useState([])
-  useEffect(() => { if (user) load() }, [user])
+  const loc = useLocation()
+  const nav = useNavigate()
+  const [profile, setProfile] = useState(null)
+  const [periodHours, setPeriodHours] = useState(0)
+
+  useEffect(() => { if (user) load() }, [user, loc.key])
   async function load() {
-    const { data } = await supabase.from('goals').select('*').eq('user_id', user.id).eq('is_active', true).order('created_at')
-    setGoals(data || [])
+    const { data: p } = await supabase.from('profiles').select('*').eq('id', user.id).single()
+    setProfile(p)
+    const period = getCurrentPeriod(p, new Date())
+    const { data: tickets } = await supabase
+      .from('tickets').select('total_flag_hours, ticket_date').eq('user_id', user.id)
+      .gte('ticket_date', period.start.toISOString()).lte('ticket_date', period.end.toISOString())
+    setPeriodHours((tickets || []).reduce((s, t) => s + parseFloat(t.total_flag_hours || 0), 0))
   }
+
+  if (!profile) return <AppShell title="Goals" subtitle="Track what matters" showBack><div className="px-5 text-text-dim text-sm">Loading…</div></AppShell>
+
+  const period = getCurrentPeriod(profile, new Date())
+  const rate = parseFloat(profile.hourly_rate || 0)
+  const goalAmount = parseFloat(profile.period_goal_amount || 2500)
+  const earned = periodHours * rate
+  const pct = Math.min(100, Math.round((earned / goalAmount) * 100))
+  const hoursNeeded = rate > 0 ? goalAmount / rate : 0
+  const hoursToGo = Math.max(0, hoursNeeded - periodHours)
+  const pace = paceStatus(period, earned, goalAmount)
+  const periodWord = period.daysTotal === 14 ? 'Biweekly' : 'Weekly'
 
   return (
     <AppShell title="Goals" subtitle="Track what matters" showBack>
       <div className="px-5 grid gap-3">
-        {goals.length === 0 && (
-          <div className="bg-surface border border-border-soft rounded-2xl p-8 text-center">
-            <Icon name="target" className="w-10 h-10 text-text-mute mx-auto mb-3" />
-            <div className="font-medium mb-1">No goals yet</div>
-            <p className="text-sm text-text-dim mb-4">Set a weekly income or hours target to track progress.</p>
+        {/* Main income goal card */}
+        <div className="bg-surface border border-border-soft rounded-3xl p-5">
+          <div className="flex justify-between items-start mb-4">
+            <div>
+              <div className="text-base font-semibold">{periodWord} Income Goal</div>
+              <div className="text-[11px] text-text-mute tracking-wider uppercase mt-1">{periodRangeLabel(period)}</div>
+            </div>
+            <button onClick={() => nav('/settings')} className="text-xs text-red font-medium inline-flex items-center gap-1">
+              <Icon name="edit" className="w-3.5 h-3.5" /> Edit
+            </button>
           </div>
-        )}
-        {goals.map(g => (
-          <div key={g.id} className="bg-surface border border-border-soft rounded-3xl p-5">
-            <div className="flex justify-between items-center mb-3.5">
-              <div>
-                <div className="text-base font-semibold">{g.goal_type === 'income' ? 'Income' : 'Flag Hours'} · {g.period}</div>
-                <div className="text-[11px] text-text-mute tracking-wider uppercase mt-1">{g.period}</div>
-              </div>
-              <div className="text-right">
-                <div className="text-2xl font-bold text-red font-mono">--</div>
-                <div className="text-sm text-text-dim mt-1"><strong>0</strong> / {g.target_amount}</div>
-              </div>
+
+          <div className="flex items-baseline justify-between">
+            <div className="text-red text-5xl font-bold tracking-tight leading-none flex items-baseline">
+              {pct}<span className="text-2xl">%</span>
+            </div>
+            <div className="text-right">
+              <div className="text-xl font-bold font-mono">{fmtMoney(earned)}</div>
+              <div className="text-sm text-text-dim">of {fmtMoney(goalAmount)}</div>
             </div>
           </div>
-        ))}
+
+          <div className="my-4 h-2 bg-surface-3 rounded-full overflow-hidden">
+            <div className="h-full bg-gradient-to-r from-red to-red-hover rounded-full transition-all" style={{ width: `${pct}%` }} />
+          </div>
+
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <GoalStat label="Hours done" value={periodHours.toFixed(1)} />
+            <GoalStat label="Hours to go" value={hoursToGo.toFixed(1)} accent />
+            <GoalStat label="Days left" value={period.daysLeft} />
+          </div>
+
+          <div className={`mt-4 text-center text-sm font-medium ${pace.tone === 'green' ? 'text-green' : pace.tone === 'red' ? 'text-red' : 'text-text-dim'}`}>
+            {pace.label}
+          </div>
+        </div>
+
+        {/* Hours target derived card */}
+        <div className="bg-surface border border-border-soft rounded-3xl p-5">
+          <div className="text-sm font-semibold mb-1">Flag Hours Target</div>
+          <div className="text-xs text-text-mute mb-3">To hit {fmtMoney(goalAmount)} at your rate</div>
+          <div className="flex items-baseline gap-2">
+            <span className="text-3xl font-bold font-mono text-text-main">{hoursNeeded.toFixed(1)}</span>
+            <span className="text-sm text-text-dim">hrs needed this {periodWord.toLowerCase().replace('ly','')}</span>
+          </div>
+        </div>
       </div>
     </AppShell>
+  )
+}
+
+function GoalStat({ label, value, accent }) {
+  return (
+    <div className="bg-surface-2 border border-border-soft rounded-xl py-2.5">
+      <div className={`text-lg font-bold font-mono ${accent ? 'text-red' : ''}`}>{value}</div>
+      <div className="text-[9px] tracking-wider uppercase text-text-mute mt-0.5 font-semibold">{label}</div>
+    </div>
   )
 }
 
@@ -260,6 +321,7 @@ export function Settings() {
   const [profile, setProfile] = useState(null)
   const { unlocked, lock } = useRateLock()
   const [showUnlock, setShowUnlock] = useState(false)
+  const [savingField, setSavingField] = useState('')
 
   useEffect(() => { if (user) load() }, [user])
   async function load() {
@@ -267,12 +329,23 @@ export function Settings() {
     setProfile(data)
   }
 
+  async function updateProfile(patch, fieldName = '') {
+    setSavingField(fieldName)
+    setProfile(p => ({ ...p, ...patch }))
+    await supabase.from('profiles').update(patch).eq('id', user.id)
+    setSavingField('')
+  }
+
+  const DAYS = [['Sun',0],['Mon',1],['Tue',2],['Wed',3],['Thu',4],['Fri',5],['Sat',6]]
+  const mode = profile?.pay_period_mode || 'weekly'
+  const startDay = profile?.pay_period_start_day ?? 0
+
   return (
     <AppShell title="Settings" subtitle="Tune the app to your shop" showBack>
       <SettingsGroup title="Profile">
         <SettingsRow label="Full Name" sub={profile?.full_name || '—'} />
         <SettingsRow label="Email" sub={user?.email || '—'} />
-        <SettingsRow label="Shop" sub={profile?.shop_name || 'Add your shop'} />
+        <EditableRow label="Shop" value={profile?.shop_name || ''} placeholder="Add your shop" onSave={v => updateProfile({ shop_name: v }, 'shop')} />
       </SettingsGroup>
 
       <SettingsGroup title="Pay">
@@ -283,7 +356,7 @@ export function Settings() {
           </div>
           {unlocked && profile ? (
             <div className="flex items-center gap-2">
-              <span className="text-red font-bold font-mono">{fmtMoney(profile.hourly_rate || 0)}</span>
+              <RateEditor value={profile.hourly_rate || 0} onSave={v => updateProfile({ hourly_rate: v }, 'rate')} />
               <button onClick={lock} className="bg-surface-3 hover:bg-red/10 hover:text-red text-text-dim font-semibold text-[11px] px-2.5 py-1 rounded-full inline-flex items-center gap-1.5">
                 <Icon name="unlock" className="w-3 h-3" /> Lock
               </button>
@@ -297,8 +370,42 @@ export function Settings() {
             </button>
           )}
         </div>
-        <SettingsRow label="Currency" value="USD ($)" chevron />
-        <SettingsRow label="Pay Frequency" value="Biweekly" chevron />
+
+        {/* Pay period goal */}
+        <div className="flex justify-between items-center px-5 py-4 border-b border-border-soft">
+          <div>
+            <div className="text-sm font-medium">Pay Period Goal</div>
+            <div className="text-xs text-text-mute mt-0.5">Income target per period</div>
+          </div>
+          <GoalEditor value={profile?.period_goal_amount || 2500} onSave={v => updateProfile({ period_goal_amount: v }, 'goal')} />
+        </div>
+
+        {/* Pay period mode */}
+        <div className="px-5 py-4 border-b border-border-soft">
+          <div className="text-sm font-medium mb-2.5">Pay Period</div>
+          <div className="flex gap-2">
+            {['weekly', 'biweekly'].map(m => (
+              <button key={m} onClick={() => updateProfile({ pay_period_mode: m }, 'mode')}
+                className={`flex-1 py-2.5 rounded-xl text-sm font-medium border capitalize ${mode === m ? 'bg-red/10 border-red text-red' : 'bg-surface-2 border-border-soft text-text-dim'}`}>
+                {m}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Start day */}
+        <div className="px-5 py-4 border-b border-border-soft last:border-b-0">
+          <div className="text-sm font-medium mb-1">Period Starts On</div>
+          <div className="text-xs text-text-mute mb-2.5">{mode === 'biweekly' ? 'First day of your 2-week period' : 'First day of your week'}</div>
+          <div className="flex gap-1.5 flex-wrap">
+            {DAYS.map(([label, val]) => (
+              <button key={val} onClick={() => updateProfile({ pay_period_start_day: val, ...(mode === 'biweekly' ? { pay_period_anchor: nextDateForDay(val) } : {}) }, 'startday')}
+                className={`flex-1 min-w-[38px] py-2 rounded-lg text-xs font-semibold border ${startDay === val ? 'bg-red text-white border-red' : 'bg-surface-2 border-border-soft text-text-dim'}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
       </SettingsGroup>
 
       <SettingsGroup title="Privacy">
@@ -322,6 +429,65 @@ export function Settings() {
 
       <UnlockModal open={showUnlock} onClose={() => setShowUnlock(false)} />
     </AppShell>
+  )
+}
+
+// Returns the next date (YYYY-MM-DD) matching the given weekday, used as biweekly anchor
+function nextDateForDay(targetDay) {
+  const today = new Date(); today.setHours(0,0,0,0)
+  const diff = (targetDay - today.getDay() + 7) % 7
+  const d = new Date(today); d.setDate(today.getDate() - (7 - diff) % 7) // most recent occurrence
+  // use most recent occurrence on/before today as the anchor
+  const back = (today.getDay() - targetDay + 7) % 7
+  const anchor = new Date(today); anchor.setDate(today.getDate() - back)
+  return anchor.toISOString().slice(0,10)
+}
+
+function RateEditor({ value, onSave }) {
+  const [editing, setEditing] = useState(false)
+  const [val, setVal] = useState(value)
+  if (!editing) return (
+    <button onClick={() => { setVal(value); setEditing(true) }} className="text-red font-bold font-mono">{fmtMoney(value)}</button>
+  )
+  return (
+    <input autoFocus type="number" step="0.01" value={val} onChange={e => setVal(e.target.value)}
+      onBlur={() => { onSave(parseFloat(val) || 0); setEditing(false) }}
+      onKeyDown={e => { if (e.key === 'Enter') { onSave(parseFloat(val) || 0); setEditing(false) } }}
+      className="w-24 bg-surface-2 border border-red rounded-lg px-2 py-1 text-right text-red font-bold font-mono" />
+  )
+}
+
+function GoalEditor({ value, onSave }) {
+  const [editing, setEditing] = useState(false)
+  const [val, setVal] = useState(value)
+  if (!editing) return (
+    <button onClick={() => { setVal(value); setEditing(true) }} className="text-text-main font-bold font-mono">{fmtMoney(value)}</button>
+  )
+  return (
+    <input autoFocus type="number" step="50" value={val} onChange={e => setVal(e.target.value)}
+      onBlur={() => { onSave(parseFloat(val) || 0); setEditing(false) }}
+      onKeyDown={e => { if (e.key === 'Enter') { onSave(parseFloat(val) || 0); setEditing(false) } }}
+      className="w-28 bg-surface-2 border border-red rounded-lg px-2 py-1 text-right text-text-main font-bold font-mono" />
+  )
+}
+
+function EditableRow({ label, value, placeholder, onSave }) {
+  const [editing, setEditing] = useState(false)
+  const [val, setVal] = useState(value)
+  return (
+    <div className="flex justify-between items-center px-5 py-4 border-b border-border-soft last:border-b-0">
+      <div className="text-sm font-medium">{label}</div>
+      {editing ? (
+        <input autoFocus value={val} onChange={e => setVal(e.target.value)}
+          onBlur={() => { onSave(val); setEditing(false) }}
+          onKeyDown={e => { if (e.key === 'Enter') { onSave(val); setEditing(false) } }}
+          className="w-40 bg-surface-2 border border-red rounded-lg px-2 py-1 text-right text-sm" />
+      ) : (
+        <button onClick={() => { setVal(value); setEditing(true) }} className={`text-sm ${value ? 'text-text-dim' : 'text-text-mute'}`}>
+          {value || placeholder}
+        </button>
+      )}
+    </div>
   )
 }
 

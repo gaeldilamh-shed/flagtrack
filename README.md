@@ -281,3 +281,22 @@ What changed in v0.2:
 - **Home reminder** — a banner shows how many services need hours or are estimated, so nothing slips before payday
 
 🏁 **Track every flag. Know every dollar.**
+
+---
+
+## ⚙️ v0.3 update — pay periods + reactive dashboard
+
+This update makes the numbers come alive. ONE database step:
+
+1. Supabase → SQL Editor → New query
+2. Paste the contents of `supabase/migration-payperiod.sql`
+3. Run it (adds pay-period + goal columns to your profile)
+
+What changed in v0.3:
+- **Pay period engine** — choose Weekly or Biweekly and your start day in Settings. Everything (home, dashboard, goals) now calculates against YOUR period, not a generic week.
+- **Per-period goal** — set a target like $2,500/period in Settings. Home shows % progress, $ earned, and **hours-to-go** so you always know what's left.
+- **Smart pacing** — "On pace" / "X% behind pace" based on how far into the period you are.
+- **Reactive everywhere** — confirm a ticket and Home, Dashboard, Goals, and History all update the moment you land back on them. No more stale numbers.
+- **Editable settings** — tap your rate, goal, period mode, and start day right in Settings; saves instantly.
+- **Real Goals page** — live progress, hours done, hours to go, days left.
+- **Period-aware Dashboard** — bar chart spans your actual period, projections based on your real daily average.
