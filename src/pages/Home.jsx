@@ -1,15 +1,15 @@
-import { useEffect, useState } from 'react'
-import { useNavigate, useLocation } from 'react-router-dom'
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { AppShell } from '../components/AppShell'
 import { Icon } from '../components/Icon'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { useGoalMoneyHidden, fmtMoney } from '../lib/privacy'
 import { getCurrentPeriod, paceStatus, periodRangeLabel } from '../lib/payPeriod'
+import { useLiveData } from '../hooks/useLiveData'
 
 export function Home() {
   const nav = useNavigate()
-  const loc = useLocation()
   const { user } = useAuth()
   const { hidden: goalMoneyHidden, toggle: toggleGoalMoney } = useGoalMoneyHidden()
   const [profile, setProfile] = useState(null)
@@ -29,11 +29,8 @@ export function Home() {
     pace: { label: '', tone: 'dim', onPace: true },
   })
 
-  // Reload whenever we navigate back to Home (e.g. after confirming a ticket)
-  useEffect(() => {
-    if (!user) return
-    loadData()
-  }, [user, loc.key])
+  // Reload on mount, navigation, tab focus, and app foreground
+  useLiveData(() => { if (user) loadData() }, [user])
 
   async function loadData() {
     const { data: prof } = await supabase.from('profiles').select('*').eq('id', user.id).single()

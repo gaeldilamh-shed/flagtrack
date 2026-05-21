@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate, useLocation } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { AppShell } from '../components/AppShell'
 import { Icon } from '../components/Icon'
 import { supabase } from '../lib/supabase'
@@ -7,18 +7,18 @@ import { useAuth } from '../lib/auth'
 import { fmtMoney, useRateLock } from '../lib/privacy'
 import { UnlockModal } from '../components/UnlockModal'
 import { getCurrentPeriod, paceStatus, periodRangeLabel } from '../lib/payPeriod'
+import { useLiveData } from '../hooks/useLiveData'
 
 // ============ HISTORY ============
 export function History() {
   const nav = useNavigate()
-  const loc = useLocation()
   const { user } = useAuth()
   const [tickets, setTickets] = useState([])
   const [profile, setProfile] = useState(null)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
 
-  useEffect(() => { if (user) load() }, [user, loc.key])
+  useLiveData(() => { if (user) load() }, [user])
   async function load() {
     const { data: t } = await supabase.from('tickets').select('*, ticket_lines(description)').eq('user_id', user.id).order('ticket_date', { ascending: false }).limit(100)
     const { data: p } = await supabase.from('profiles').select('hourly_rate').eq('id', user.id).single()
@@ -89,13 +89,12 @@ export function History() {
 // ============ DASHBOARD ============
 export function Dashboard() {
   const { user } = useAuth()
-  const loc = useLocation()
   const [tickets, setTickets] = useState([])
   const [profile, setProfile] = useState(null)
   const { unlocked } = useRateLock()
   const [showUnlock, setShowUnlock] = useState(false)
 
-  useEffect(() => { if (user) load() }, [user, loc.key])
+  useLiveData(() => { if (user) load() }, [user])
   async function load() {
     const since = new Date(); since.setDate(since.getDate() - 120)
     const { data: t } = await supabase.from('tickets').select('*').eq('user_id', user.id).gte('ticket_date', since.toISOString())
@@ -210,12 +209,11 @@ function ProjRow({ label, value, blurred }) {
 // ============ GOALS ============
 export function Goals() {
   const { user } = useAuth()
-  const loc = useLocation()
   const nav = useNavigate()
   const [profile, setProfile] = useState(null)
   const [periodHours, setPeriodHours] = useState(0)
 
-  useEffect(() => { if (user) load() }, [user, loc.key])
+  useLiveData(() => { if (user) load() }, [user])
   async function load() {
     const { data: p } = await supabase.from('profiles').select('*').eq('id', user.id).single()
     setProfile(p)
