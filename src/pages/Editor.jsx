@@ -161,9 +161,11 @@ export function Editor() {
   }
 
   // Totals: only count lines that actually have hours. needs_hours lines don't count yet.
-  const totalHours = lines.reduce((sum, l) => sum + (parseFloat(l.quantity || 0) * parseFloat(l.flag_hours_per_unit || 0)), 0)
-  const confirmedHours = lines.filter(l => l.status === 'confirmed').reduce((s, l) => s + (parseFloat(l.quantity || 0) * parseFloat(l.flag_hours_per_unit || 0)), 0)
-  const estimatedHours = lines.filter(l => l.status === 'estimated').reduce((s, l) => s + (parseFloat(l.quantity || 0) * parseFloat(l.flag_hours_per_unit || 0)), 0)
+  // Quantity NEVER multiplies flag hours. The FRH belongs to the service itself.
+  // One service = its flag hours, period.
+  const totalHours = lines.reduce((sum, l) => sum + (parseFloat(l.flag_hours_per_unit || 0)), 0)
+  const confirmedHours = lines.filter(l => l.status === 'confirmed').reduce((s, l) => s + (parseFloat(l.flag_hours_per_unit || 0)), 0)
+  const estimatedHours = lines.filter(l => l.status === 'estimated').reduce((s, l) => s + (parseFloat(l.flag_hours_per_unit || 0)), 0)
   const needsHoursCount = lines.filter(l => l.status === 'needs_hours').length
 
   async function save(status = 'confirmed') {
@@ -201,7 +203,7 @@ export function Editor() {
           description: l.description,
           quantity: parseFloat(l.quantity) || 1,
           flag_hours_per_unit: parseFloat(l.flag_hours_per_unit) || 0,
-          total_flag_hours: (parseFloat(l.quantity) || 1) * (parseFloat(l.flag_hours_per_unit) || 0),
+          total_flag_hours: (parseFloat(l.flag_hours_per_unit) || 0),
           status: l.status || 'confirmed',
           match_confidence: l.match_confidence || null,
           notes: l.notes || null,
@@ -340,12 +342,11 @@ function FieldSmall({ label, value, onChange }) {
 }
 
 function LineItem({ line, onChange, onRemove, onCopy }) {
-  const total = (parseFloat(line.quantity || 0) * parseFloat(line.flag_hours_per_unit || 0)).toFixed(2)
   const needsHours = line.status === 'needs_hours'
   return (
     <div className={`bg-surface border rounded-2xl overflow-hidden ${needsHours ? 'border-red/40' : 'border-border-soft'}`}>
       <div className="px-4 pt-3.5 pb-2.5">
-        <input value={line.description} onChange={e => onChange({ description: e.target.value })} className="w-full bg-transparent text-[15px] font-semibold focus:text-red" placeholder="Service / item name" />
+        <input value={line.description} onChange={e => onChange({ description: e.target.value })} className="w-full bg-transparent text-[15px] font-semibold focus:text-red" placeholder="Service name" />
         <div className="flex gap-1.5 flex-wrap mt-2 items-center">
           <StatusBadge status={line.status} onChange={s => onChange({ status: s })} />
           {line.match_confidence && (
@@ -353,27 +354,19 @@ function LineItem({ line, onChange, onRemove, onCopy }) {
               ● {line.match_confidence} match
             </span>
           )}
-          {line.labor_dollars ? (
-            <span className="text-[11px] text-text-mute px-1.5 py-1">Ticket labor: ${Number(line.labor_dollars).toFixed(2)}</span>
-          ) : null}
         </div>
       </div>
-      <div className="grid grid-cols-3 bg-surface-2 border-t border-border-soft">
-        <Cell label="Qty">
-          <input type="number" step="1" min="1" value={line.quantity} onChange={e => onChange({ quantity: e.target.value })} className="w-full bg-transparent text-center text-base font-bold font-mono focus:text-red" />
-        </Cell>
-        <Cell label="Flag / Unit">
+      <div className="flex items-center justify-between bg-surface-2 border-t border-border-soft px-4 py-3">
+        <span className="text-[11px] tracking-widest text-text-mute uppercase font-semibold">Flag Hours</span>
+        <div className="flex items-center gap-1.5">
           <input type="number" step="0.1" min="0" value={line.flag_hours_per_unit} onChange={e => {
             const v = e.target.value
             const patch = { flag_hours_per_unit: v }
-            // If they fill hours on a needs_hours line, promote it to confirmed
             if (line.status === 'needs_hours' && parseFloat(v) > 0) patch.status = 'confirmed'
             onChange(patch)
-          }} className="w-full bg-transparent text-center text-base font-bold font-mono focus:text-red" />
-        </Cell>
-        <Cell label="Total Hrs">
-          <div className="text-base font-bold font-mono text-red">{total}</div>
-        </Cell>
+          }} className="w-20 bg-transparent text-right text-xl font-bold font-mono text-red focus:text-red-hover" />
+          <span className="text-sm text-text-dim font-mono">hr</span>
+        </div>
       </div>
       <div className="flex border-t border-border-soft">
         <MiniBtn onClick={onCopy}><Icon name="copy" className="w-3 h-3" />Copy</MiniBtn>
@@ -383,14 +376,6 @@ function LineItem({ line, onChange, onRemove, onCopy }) {
   )
 }
 
-function Cell({ label, children }) {
-  return (
-    <div className="px-2 py-2.5 border-r border-border-soft last:border-r-0 text-center">
-      <div className="text-[9px] tracking-widest text-text-mute uppercase font-semibold mb-1">{label}</div>
-      {children}
-    </div>
-  )
-}
 function MiniBtn({ children, onClick, danger }) {
   return (
     <button onClick={onClick} className={`flex-1 py-2.5 text-xs font-medium flex items-center justify-center gap-1.5 border-r last:border-r-0 border-border-soft hover:bg-surface-2 ${danger ? 'hover:text-red' : 'text-text-dim hover:text-text-main'}`}>
@@ -428,7 +413,6 @@ function Row({ label, value }) {
 
 function AddLineModal({ onClose, onAdd }) {
   const [desc, setDesc] = useState('')
-  const [qty, setQty] = useState('1')
   const [flag, setFlag] = useState('')
   const [status, setStatus] = useState('confirmed')
 
@@ -436,33 +420,27 @@ function AddLineModal({ onClose, onAdd }) {
     <div className="fixed inset-0 bg-black/75 z-[300] flex items-end justify-center" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
       <div className="w-full max-w-[440px] bg-surface rounded-t-3xl px-6 pt-4 pb-8 animate-slide-up">
         <div className="w-10 h-1 bg-surface-3 rounded-full mx-auto mb-4"></div>
-        <h3 className="text-lg font-semibold mb-4">Add Line Item</h3>
+        <h3 className="text-lg font-semibold mb-4">Add Service</h3>
         <div className="mb-3">
-          <label className="block text-xs font-semibold tracking-wider text-text-dim uppercase mb-2">Item / Service</label>
+          <label className="block text-xs font-semibold tracking-wider text-text-dim uppercase mb-2">Service</label>
           <input value={desc} onChange={e => setDesc(e.target.value)} placeholder="e.g. Front Brake Pads" className="w-full bg-surface-2 border border-border rounded-xl px-4 py-3 text-[15px] focus:border-red" />
         </div>
-        <div className="grid grid-cols-2 gap-2.5 mb-3">
-          <div>
-            <label className="block text-xs font-semibold tracking-wider text-text-dim uppercase mb-2">Quantity</label>
-            <input type="number" step="1" value={qty} onChange={e => setQty(e.target.value)} className="w-full bg-surface-2 border border-border rounded-xl px-4 py-3 text-[15px] focus:border-red" />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold tracking-wider text-text-dim uppercase mb-2">Flag / Unit (hrs)</label>
-            <input type="number" step="0.1" value={flag} onChange={e => setFlag(e.target.value)} placeholder="0.0" className="w-full bg-surface-2 border border-border rounded-xl px-4 py-3 text-[15px] focus:border-red" />
-          </div>
+        <div className="mb-3">
+          <label className="block text-xs font-semibold tracking-wider text-text-dim uppercase mb-2">Flag Hours</label>
+          <input type="number" step="0.1" value={flag} onChange={e => setFlag(e.target.value)} placeholder="0.0" className="w-full bg-surface-2 border border-border rounded-xl px-4 py-3 text-[15px] focus:border-red" />
         </div>
         <div className="mb-4">
           <label className="block text-xs font-semibold tracking-wider text-text-dim uppercase mb-2">Status</label>
           <select value={status} onChange={e => setStatus(e.target.value)} className="w-full bg-surface-2 border border-border rounded-xl px-4 py-3 text-[15px] focus:border-red">
             <option value="confirmed">Confirmed</option>
             <option value="estimated">Estimated</option>
-            <option value="pending">Pending Approval</option>
+            <option value="needs_hours">Needs Hours</option>
             <option value="added_later">Added Later</option>
           </select>
         </div>
         <div className="flex gap-2.5">
           <button onClick={onClose} className="flex-1 py-3.5 bg-surface-2 border border-border rounded-xl font-semibold text-sm">Cancel</button>
-          <button onClick={() => { if (!desc) return alert('Add a description'); onAdd({ description: desc, quantity: parseFloat(qty) || 1, flag_hours_per_unit: parseFloat(flag) || 0, status }) }} className="flex-1 py-3.5 bg-red text-white font-bold rounded-xl text-sm">Add Item</button>
+          <button onClick={() => { if (!desc) return alert('Add a service name'); onAdd({ description: desc, quantity: 1, flag_hours_per_unit: parseFloat(flag) || 0, status }) }} className="flex-1 py-3.5 bg-red text-white font-bold rounded-xl text-sm">Add Service</button>
         </div>
       </div>
     </div>

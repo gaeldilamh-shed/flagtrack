@@ -284,6 +284,21 @@ What changed in v0.2:
 
 ---
 
+## ⚙️ v0.4 update — article-number flag decoding
+
+This is the big accuracy update based on how Firestone tickets actually encode flag time. **No database step** — front-end + scan function only.
+
+What changed:
+- **Article-number FRH decoding** — when a ticket doesn't print flag hours, the app now reads the first 2 digits of each 9-digit article number as the flag time (e.g. `037008190` → 0.3, `057015016` → 0.5).
+- **Header grouping** — all qualifying labor lines under a bold section header (e.g. FIRESTONE TIRE PACKAGE) sum into ONE service (0.3 + 0.5 = 0.8).
+- **Quantity is ignored entirely** — flag hours belong to the service, never multiplied by qty (3 tires ≠ 3× the hours).
+- **DOT numbers & handwritten lines skipped** — penned-in tire codes no longer confuse the scan.
+- **Parts/fees skipped** — only 9-digit labor article numbers count; shorter numbers (parts) and fees are ignored.
+- **Fixed-value packages** — "Car Care Package" = 0.5 flat and absorbs all its sub-lines (rotation, battery check, etc.). More can be added in `scan-ticket.js` → FIXED_PACKAGES.
+- **Cleaner editor** — each service shows one Flag Hours field instead of Qty × Flag × Total.
+
+---
+
 ## ⚙️ v0.3 update — pay periods + reactive dashboard
 
 This update makes the numbers come alive. ONE database step:
