@@ -6,6 +6,20 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { matchLibraryItem, STARTER_FLAG_LIBRARY } from '../data/starterLibrary'
 
+// Normalize a work order number for matching: digits only.
+// "WO# 195448" / "195448 " / "#195448" all become "195448".
+function normalizeWO(wo) {
+  if (!wo) return ''
+  const digits = String(wo).replace(/\D/g, '')
+  return digits
+}
+
+// Normalize a service name for duplicate detection.
+function normName(name) {
+  if (!name) return ''
+  return String(name).toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
 export function Editor() {
   const { id } = useParams()
   const [params] = useSearchParams()
@@ -47,27 +61,54 @@ export function Editor() {
   }, [id])
 
   // When a scan comes in: if a ticket with the same Work Order # already exists,
-  // load it and append the new (non-duplicate) services. Otherwise start fresh.
+  // load it and append ONLY genuinely new services. Otherwise start fresh.
   async function handleScan(scan) {
-    const wo = (scan.work_order || '').trim()
+    const wo = normalizeWO(scan.work_order)
     if (wo) {
-      const { data: existing } = await supabase
-        .from('tickets').select('*').eq('user_id', user.id).eq('work_order', wo).maybeSingle()
+      // Find existing ticket(s) with this work order. Use the most recent if several.
+      const { data: matches } = await supabase
+        .from('tickets').select('*').eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+
+      const existing = (matches || []).find(t => normalizeWO(t.work_order) === wo)
+
       if (existing) {
-        // Merge into the existing ticket
         const { data: existingLines } = await supabase
           .from('ticket_lines').select('*').eq('ticket_id', existing.id).order('position')
+
         setTicket(existing)
         setImagePath(existing.image_path)
         setMergedTicketId(existing.id)
-        setMergeNote(`Added to existing ticket WO #${wo}`)
+        setMergeNote(`Added to existing order WO #${existing.work_order}`)
 
-        const items = scan.services || scan.line_items || []
-        const existingNames = new Set((existingLines || []).map(l => (l.description || '').toLowerCase().trim()))
-        const newLines = items
-          .map((s, idx) => mapServiceToLine(s, (existingLines?.length || 0) + idx))
-          .filter(l => !existingNames.has((l.description || '').toLowerCase().trim())) // skip exact-duplicate services
-        setLines([...(existingLines || []), ...newLines])
+        // Existing lines, mapped into editor shape (so totals compute consistently)
+        const existingMapped = (existingLines || []).map((l, i) => ({
+          id: l.id,
+          position: i,
+          description: l.description || '',
+          quantity: l.quantity || 1,
+          flag_hours_per_unit: parseFloat(l.flag_hours_per_unit) || 0,
+          status: l.status || 'confirmed',
+          match_confidence: l.match_confidence || null,
+          breakdown: '',
+          notes: l.notes || '',
+          _existing: true,
+        }))
+
+        // Build a set of normalized names already present, so we never add a duplicate
+        const have = new Set(existingMapped.map(l => normName(l.description)))
+
+        const incoming = scan.services || scan.line_items || []
+        const newLines = []
+        for (let i = 0; i < incoming.length; i++) {
+          const mapped = mapServiceToLine(incoming[i], existingMapped.length + i)
+          const key = normName(mapped.description)
+          if (have.has(key)) continue   // already on the ticket -> skip, do NOT re-add its FRH
+          have.add(key)                 // guard against duplicates within the new scan too
+          newLines.push(mapped)
+        }
+
+        setLines([...existingMapped, ...newLines])
         return
       }
     }
