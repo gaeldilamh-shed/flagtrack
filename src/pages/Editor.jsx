@@ -137,6 +137,7 @@ export function Editor() {
       status,
       match_confidence: confidence,
       labor_dollars: s.labor_dollars || null,
+      breakdown: s.breakdown || '',
       notes: '',
     }
   }
@@ -347,6 +348,9 @@ function LineItem({ line, onChange, onRemove, onCopy }) {
     <div className={`bg-surface border rounded-2xl overflow-hidden ${needsHours ? 'border-red/40' : 'border-border-soft'}`}>
       <div className="px-4 pt-3.5 pb-2.5">
         <input value={line.description} onChange={e => onChange({ description: e.target.value })} className="w-full bg-transparent text-[15px] font-semibold focus:text-red" placeholder="Service name" />
+        {line.breakdown ? (
+          <div className="text-[11px] text-text-mute mt-1 leading-relaxed">Includes: {line.breakdown}</div>
+        ) : null}
         <div className="flex gap-1.5 flex-wrap mt-2 items-center">
           <StatusBadge status={line.status} onChange={s => onChange({ status: s })} />
           {line.match_confidence && (

@@ -20,9 +20,10 @@ export const STARTER_FLAG_LIBRARY = [
   { category: 'Tires', name: 'Wheel Balance (per wheel)', flag_hours: 0.2 },
 
   // --- ALIGNMENT ---
-  { category: 'Alignment', name: 'Two-Wheel Alignment', flag_hours: 0.7 },
-  { category: 'Alignment', name: 'Four-Wheel Alignment', flag_hours: 1.0 },
-  { category: 'Alignment', name: 'Alignment Check', flag_hours: 0.3 },
+  { category: 'Alignment', name: 'Alignment Check', flag_hours: 0.6 },
+  { category: 'Alignment', name: 'Standard Alignment', flag_hours: 1.2 },
+  { category: 'Alignment', name: 'Steering Angle Sensor Recalibration', flag_hours: 0.2 },
+  { category: 'Alignment', name: 'Alignment Recheck (Warranty)', flag_hours: 0.8 },
 
   // --- BRAKES ---
   { category: 'Brakes', name: 'Front Brake Pads', flag_hours: 1.0 },
@@ -62,7 +63,7 @@ export const STARTER_FLAG_LIBRARY = [
   { category: 'Belts', name: 'Timing Belt Replacement', flag_hours: 4.0 },
 
   // --- INSPECTIONS & DIAGNOSTICS ---
-  { category: 'Diagnostic', name: 'Courtesy Check', flag_hours: 0.2 },
+  { category: 'Diagnostic', name: 'Courtesy Check', flag_hours: 0.1 },
   { category: 'Diagnostic', name: 'Basic Diagnostic', flag_hours: 1.0 },
   { category: 'Diagnostic', name: 'Check Engine Light Diagnostic', flag_hours: 1.0 },
   { category: 'Diagnostic', name: 'AC System Diagnostic', flag_hours: 1.0 },
@@ -84,12 +85,15 @@ const SYNONYMS = [
   { keywords: ['tire install', 'tire installation', 'mount', 'new tire'], target: 'Tire Mount & Balance (per tire)' },
   { keywords: ['wheel balance', 'balance labor', 'tire balance'], target: 'Wheel Balance (per wheel)' },
   { keywords: ['tire rotation', 'rotate'], target: 'Tire Rotation' },
-  { keywords: ['tpms', 'valve service', 'sensor'], target: 'TPMS Sensor Replacement (each)' },
+  { keywords: ['tpms', 'valve service kit', 'tire pressure sensor'], target: 'TPMS Sensor Replacement (each)' },
   { keywords: ['flat repair', 'patch', 'plug tire'], target: 'Flat Repair' },
-  { keywords: ['four wheel align', '4 wheel align', 'four-wheel'], target: 'Four-Wheel Alignment' },
-  { keywords: ['two wheel align', '2 wheel align', 'two-wheel'], target: 'Two-Wheel Alignment' },
-  { keywords: ['alignment check', 'align check', 'alignment'], target: 'Alignment Check' },
-  { keywords: ['courtesy check', 'inspection', 'multi point', 'multipoint'], target: 'Courtesy Check' },
+  // Alignment: most specific indicators first. "recheck/warranty/lifetime" -> recheck,
+  // "free/check" -> check, otherwise standard. Steering angle is its own line.
+  { keywords: ['steering angle', 'sas recal', 'angle sensor'], target: 'Steering Angle Sensor Recalibration' },
+  { keywords: ['alignment recheck', 'align recheck', 'lifetime align', 'warranty align', '12 month align', 'recheck'], target: 'Alignment Recheck (Warranty)' },
+  { keywords: ['free alignment', 'free wheel alignment', 'alignment check', 'align check'], target: 'Alignment Check' },
+  { keywords: ['standard alignment', 'wheel alignment', 'four wheel align', '4 wheel align', 'alignment'], target: 'Standard Alignment' },
+  { keywords: ['courtesy check', 'multi point', 'multipoint'], target: 'Courtesy Check' },
   { keywords: ['front brake', 'front pad'], target: 'Front Brake Pads' },
   { keywords: ['rear brake', 'rear pad'], target: 'Rear Brake Pads' },
   { keywords: ['brake fluid', 'brake flush'], target: 'Brake Fluid Flush' },

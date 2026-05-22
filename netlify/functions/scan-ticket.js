@@ -193,12 +193,14 @@ function computeServices(rows) {
     // FRH value, the ticket told us the flag time directly -> trust it, sum those.
     let printedSum = 0
     let printedCount = 0
+    const printedParts = []
     for (const r of groupRows) {
       if (r.is_handwritten) continue
       const pf = (r.printed_frh === null || r.printed_frh === undefined) ? null : parseFloat(r.printed_frh)
       if (pf !== null && !isNaN(pf) && pf > 0) {
         printedSum += pf
         printedCount++
+        printedParts.push(`${r.description}: ${pf.toFixed(1)}`)
       }
     }
     if (printedCount > 0) {
@@ -208,6 +210,7 @@ function computeServices(rows) {
         flag_hours: printedSum,
         source: 'printed_frh',
         confidence: 'high',
+        breakdown: printedParts.join(' · '),
       })
       continue
     }
@@ -216,6 +219,7 @@ function computeServices(rows) {
     // Sum FRH from all qualifying 9-digit labor lines under this header.
     let sum = 0
     let counted = 0
+    const articleParts = []
     for (const r of groupRows) {
       if (r.is_handwritten) continue            // skip DOT etc.
       const frh = frhFromArticle(r.article_number)
@@ -223,6 +227,7 @@ function computeServices(rows) {
       if (frh === 0) continue                   // 00-prefixed (fees / bundled) contribute nothing
       sum += frh
       counted++
+      articleParts.push(`${r.description}: ${frh.toFixed(1)}`)
     }
     sum = Math.round(sum * 10) / 10
     if (counted > 0 && sum > 0) {
@@ -231,6 +236,7 @@ function computeServices(rows) {
         flag_hours: sum,
         source: 'article',
         confidence: 'high',
+        breakdown: articleParts.join(' · '),
       })
     }
   }

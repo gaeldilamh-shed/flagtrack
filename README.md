@@ -284,6 +284,19 @@ What changed in v0.2:
 
 ---
 
+## ⚙️ v0.5 update — scan-time counting, alignments, visible breakdowns
+
+**No database step required** (uses the existing `created_at` column).
+
+What changed:
+- **Counting by scan time** — a ticket counts for the calendar day and period it was *scanned/uploaded*, not the date printed on it. Shoot photos in the bay, upload at home — it still lands in today. Resets at midnight.
+- **Fully dynamic metrics** — day count, period count, hours, goal %, and gross all recalculate live; deleting a ticket drops it from every metric immediately.
+- **Three alignment types** — Alignment Check (0.6), Standard Alignment (1.2), Steering Angle Sensor Recalibration (0.2), Alignment Recheck/Warranty (0.8). The scan distinguishes them by the ticket's wording (free/check vs standard vs recheck/warranty); falls back to Alignment Check if unclear.
+- **Visible breakdowns** — when services roll up under a package header (e.g. Tire Service), the editor now shows "Includes: Tire Installation: 0.6 · Wheel Balance: 0.3" so nothing is hidden.
+- **Corrected library values** — Courtesy Check fixed to 0.1.
+
+---
+
 ## ⚙️ v0.4 update — article-number flag decoding
 
 This is the big accuracy update based on how Firestone tickets actually encode flag time. **No database step** — front-end + scan function only.

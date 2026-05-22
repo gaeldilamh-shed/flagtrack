@@ -22,7 +22,7 @@ export function History() {
 
   useLiveData(() => { if (user) load() }, [user])
   async function load() {
-    const { data: t } = await supabase.from('tickets').select('*, ticket_lines(description)').eq('user_id', user.id).order('ticket_date', { ascending: false }).limit(100)
+    const { data: t } = await supabase.from('tickets').select('*, ticket_lines(description)').eq('user_id', user.id).order('created_at', { ascending: false }).limit(100)
     const { data: p } = await supabase.from('profiles').select('hourly_rate').eq('id', user.id).single()
     setTickets(t || [])
     setProfile(p)
@@ -146,7 +146,7 @@ export function Dashboard() {
   useLiveData(() => { if (user) load() }, [user])
   async function load() {
     const since = new Date(); since.setDate(since.getDate() - 120)
-    const { data: t } = await supabase.from('tickets').select('*').eq('user_id', user.id).gte('ticket_date', since.toISOString())
+    const { data: t } = await supabase.from('tickets').select('*').eq('user_id', user.id).gte('created_at', since.toISOString())
     const { data: p } = await supabase.from('profiles').select('*').eq('id', user.id).single()
     setTickets(t || [])
     setProfile(p)
@@ -154,23 +154,23 @@ export function Dashboard() {
 
   const rate = parseFloat(profile?.hourly_rate || 0)
 
-  // Current period (user-configured)
+  // Current period (user-configured). All counting is by SCAN time (created_at).
   const now = new Date()
   const period = getCurrentPeriod(profile, now)
   const prevStart = new Date(period.start); prevStart.setDate(period.start.getDate() - period.daysTotal)
   const prevEnd = new Date(period.start); prevEnd.setMilliseconds(-1)
 
-  const periodTickets = tickets.filter(t => { const d = new Date(t.ticket_date); return d >= period.start && d <= period.end })
-  const prevTickets = tickets.filter(t => { const d = new Date(t.ticket_date); return d >= prevStart && d < period.start })
+  const periodTickets = tickets.filter(t => { const d = new Date(t.created_at); return d >= period.start && d <= period.end })
+  const prevTickets = tickets.filter(t => { const d = new Date(t.created_at); return d >= prevStart && d < period.start })
 
   const periodHours = periodTickets.reduce((s, t) => s + parseFloat(t.total_flag_hours || 0), 0)
   const prevHours = prevTickets.reduce((s, t) => s + parseFloat(t.total_flag_hours || 0), 0)
   const pctDelta = prevHours > 0 ? Math.round(((periodHours - prevHours) / prevHours) * 100) : 0
 
-  // Bars: hours per day across the period (cap display at 7 for weekly, 14 biweekly)
+  // Bars: hours per day across the period, by scan time
   const byDay = new Array(period.daysTotal).fill(0)
   periodTickets.forEach(t => {
-    const d = new Date(t.ticket_date); d.setHours(0,0,0,0)
+    const d = new Date(t.created_at); d.setHours(0,0,0,0)
     const idx = Math.floor((d - period.start) / (24*60*60*1000))
     if (idx >= 0 && idx < period.daysTotal) byDay[idx] += parseFloat(t.total_flag_hours || 0)
   })
@@ -268,8 +268,8 @@ export function Goals() {
     setProfile(p)
     const period = getCurrentPeriod(p, new Date())
     const { data: tickets } = await supabase
-      .from('tickets').select('total_flag_hours, ticket_date').eq('user_id', user.id)
-      .gte('ticket_date', period.start.toISOString()).lte('ticket_date', period.end.toISOString())
+      .from('tickets').select('total_flag_hours, created_at').eq('user_id', user.id)
+      .gte('created_at', period.start.toISOString()).lte('created_at', period.end.toISOString())
     setPeriodHours((tickets || []).reduce((s, t) => s + parseFloat(t.total_flag_hours || 0), 0))
   }
 

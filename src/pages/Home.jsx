@@ -39,24 +39,25 @@ export function Home() {
     const now = new Date()
     const period = getCurrentPeriod(prof, now)
 
-    // Today range
+    // Today = calendar day (midnight to midnight), based on SCAN time (created_at), not ticket date
     const today = new Date(); today.setHours(0, 0, 0, 0)
     const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1)
 
-    // Load tickets in the current pay period
+    // Load tickets scanned within the current pay period (by created_at = when confirmed/saved)
     const { data: tickets } = await supabase
       .from('tickets')
-      .select('id, ticket_date, total_flag_hours, status')
+      .select('id, created_at, ticket_date, total_flag_hours, status')
       .eq('user_id', user.id)
-      .gte('ticket_date', period.start.toISOString())
-      .lte('ticket_date', period.end.toISOString())
+      .gte('created_at', period.start.toISOString())
+      .lte('created_at', period.end.toISOString())
 
     const periodHours = (tickets || []).reduce((s, t) => s + (parseFloat(t.total_flag_hours) || 0), 0)
     const rate = parseFloat(prof?.hourly_rate || 0)
     const periodPay = periodHours * rate
 
+    // Today's tickets: scanned today (calendar day), regardless of the date printed on the ticket
     const todayTickets = (tickets || []).filter(t => {
-      const d = new Date(t.ticket_date)
+      const d = new Date(t.created_at)
       return d >= today && d < tomorrow
     }).length
 
