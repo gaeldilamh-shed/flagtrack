@@ -51,8 +51,14 @@ For EACH row in the line-item area, capture:
 - "header": the bold section header this row falls under (carry it down to all rows beneath it until the next bold header)
 - "description": the row's description text
 - "article_number": the Article Number EXACTLY as printed, including all leading zeros (e.g. "037008190", "007013632", "7009357"). If a row has no article number, use "".
-- "printed_frh": the value in the "FRH Hours" column IF that column exists on this ticket and this row has a number in it (e.g. 0.3, 0.6, 1.0). If there is no FRH column, or this row has no FRH value, use null.
+- "printed_frh": ONLY read this from a column literally titled "FRH" or "FRH Hours". This is a small number of hours like 0.1, 0.3, 0.6, 1.0. 
+    *** DO NOT use the "Labor" column or any dollar amount. *** The Labor column contains DOLLARS (like 13.99, 3.06, 5.12, 1.00) — these are NOT flag hours. If the only numbers you see for a row are in a Labor/$/Extended/Price column, set printed_frh to null. Many tickets have NO FRH column at all — in that case printed_frh is null for EVERY row.
 - "is_handwritten": true if this line is hand-written (like DOT numbers penned in by the tech)
+
+CRITICAL ABOUT FRH vs LABOR DOLLARS:
+- A real FRH column is titled "FRH" or "FRH Hours" and contains small hour values (0.1, 0.3, 0.6).
+- The "Labor" column contains DOLLAR amounts ($13.99, $3.06). NEVER put those in printed_frh.
+- If you are unsure whether a column is FRH or Labor-dollars, set printed_frh to null. It is much safer to return null (the app will decode the article number instead) than to mistake dollars for hours.
 
 IMPORTANT:
 - Some tickets HAVE a printed "FRH Hours" column; others do NOT. If you see an FRH/FRH Hours column header, read its values into "printed_frh". If there is no such column, set printed_frh null for every row.
@@ -113,7 +119,7 @@ If a field isn't visible use "" or null - never invent.`
     try { parsed = JSON.parse(content) }
     catch (e) { return { statusCode: 500, body: 'OpenAI returned non-JSON: ' + content.slice(0, 200) } }
 
-    const services = computeServices(parsed.rows || [])
+    const services = computeServices(parsed.rows || [], parsed.has_frh_column === true)
 
     const result = {
       work_order: parsed.work_order || '',
@@ -162,7 +168,7 @@ function shortName(header, fallback) {
   return base.toLowerCase().replace(/\b\w/g, c => c.toUpperCase())
 }
 
-function computeServices(rows) {
+function computeServices(rows, hasFrhColumn) {
   // Group rows by their header (carry-down already done by the model, but enforce here)
   const groups = new Map()  // header -> { rows: [] }
   let currentHeader = ''
@@ -191,13 +197,31 @@ function computeServices(rows) {
 
     // PRIORITY 1: printed FRH column. If any row under this header has a printed
     // FRH value, the ticket told us the flag time directly -> trust it, sum those.
+    // GUARD: real flag hours are small tenths (0.1-5.0). The AI sometimes mistakes
+    // the LABOR DOLLAR column ($13.99, $3.06) for FRH. Reject anything that looks
+    // like a dollar amount: > 5.0, or has non-tenth cents (e.g. 13.99, 3.06, 5.12).
+    function looksLikeFRH(v) {
+      if (v === null || v === undefined) return false
+      const n = parseFloat(v)
+      if (isNaN(n) || n <= 0) return false
+      if (n > 5.0) return false                    // flag times are rarely above 5h; dollars often are
+      // FRH values are clean tenths: 0.1, 0.3, 0.6, 1.0, 1.5...
+      // Dollar values have cents: 13.99, 3.06, 5.12. Reject if not a clean tenth.
+      const tenth = Math.round(n * 10)
+      if (Math.abs(n * 10 - tenth) > 0.001) return false   // not a clean tenth -> probably dollars
+      return true
+    }
+
     let printedSum = 0
     let printedCount = 0
     const printedParts = []
-    for (const r of groupRows) {
-      if (r.is_handwritten) continue
-      const pf = (r.printed_frh === null || r.printed_frh === undefined) ? null : parseFloat(r.printed_frh)
-      if (pf !== null && !isNaN(pf) && pf > 0) {
+    // Only trust printed FRH when the AI confirmed the ticket actually HAS an FRH column.
+    // Otherwise we fall straight to article-number decoding (avoids Labor-dollar confusion).
+    if (hasFrhColumn) {
+      for (const r of groupRows) {
+        if (r.is_handwritten) continue
+        if (!looksLikeFRH(r.printed_frh)) continue
+        const pf = parseFloat(r.printed_frh)
         printedSum += pf
         printedCount++
         printedParts.push(`${r.description}: ${pf.toFixed(1)}`)
